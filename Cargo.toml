@@ -1,0 +1,10 @@
+[package]
+name = "vocoder"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+micromath = "2.1.0"
+microfft = "0.6"
+libm = "0.2.8"
+hound = "3.4.0"
