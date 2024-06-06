@@ -1,93 +1,87 @@
-
+const BUFFER_SIZE: usize = 1024;
+use core::ops::AddAssign;
+use std::slice::Windows;
 pub struct CircularBuffer<T> {
     buffer: [T; BUFFER_SIZE],
-    head: usize,
-    tail: usize,
-    full: bool,
-    count: usize,
+    read_index: usize,
+    write_index: usize,
+    next_window_index: usize,
+    hop_pointer: usize,
     hop_size: usize,
+    window_size: usize,
+    default_value: T,
 }
 
-const BUFFER_SIZE: usize = 10; 
+impl<T> CircularBuffer<T>
+where
+    T: Copy + core::ops::AddAssign,
+{
+    pub fn new(
+        default_value: T,
+        hop_size: Option<usize>,
+        window_size: Option<usize>,
+    ) -> CircularBuffer<T> {
+        let hop_size = match hop_size {
+            Some(value) => value,
+            None => 0,
+        };
 
-impl<T: Copy + Default> CircularBuffer<T> {
-    pub fn new(hop_size: usize) -> Self {
+        let window_size = match window_size {
+            Some(value) => value,
+            None => 0,
+        };
+
         CircularBuffer {
-            buffer: [T::default(); BUFFER_SIZE],
-            head: 0,
-            tail: 0,
-            full: false,
-            count: 0,
-            hop_size,
+            buffer: [default_value; BUFFER_SIZE],
+            read_index: 0,
+            write_index: hop_size,
+            next_window_index: 0,
+            hop_size: hop_size,
+            window_size,
+            hop_pointer: hop_size,
+            default_value,
         }
     }
 
-    pub fn push(&mut self, item: T) {
-        self.buffer[self.head] = item;
-        self.head = (self.head + 1) % BUFFER_SIZE;
+    fn increment_index(&mut self, mut index: usize) -> usize {
+        index += 1;
 
-        if self.full {
-            self.tail = (self.tail + 1) % BUFFER_SIZE;
+        if index >= self.buffer.len() {
+            index = 0;
         }
 
-        if self.head == self.tail {
-            self.full = true;
-        }
-
-        self.count += 1;
-
-        if self.count >= self.hop_size {
-            self.process_window();
-            self.count = 0;
-        }
+        index
     }
 
-    fn process_window(&self) {
-        // Process the buffer window
-        // For example, copy the data to a new buffer and process it
-        let mut window = vec![T::default(); BUFFER_SIZE];
-        for i in 0..BUFFER_SIZE {
-            window[i] = self.buffer[(self.tail + i) % BUFFER_SIZE];
-        }
-        // Here you can pass the window to your FFT function or any other processing function
-        // Example:
-        // fft_process(&window);
+    pub fn read(&mut self) -> T {
+        let current_index = self.read_index;
+        self.read_index = self.increment_index(self.read_index);
+
+        self.buffer[current_index]
     }
 
-    pub fn pop(&mut self) -> Option<T> {
-        if self.is_empty() {
-            None
-        } else {
-            let item = Some(self.buffer[self.tail]);
-            self.tail = (self.tail + 1) % BUFFER_SIZE;
-            self.full = false;
-            item
-        }
+    pub fn write(&mut self, value: T) -> () {
+        self.buffer[self.write_index] = value;
+
+        //if we are at the max buffer size, circle back to 0
+        self.write_index = self.increment_index(self.write_index);
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.head == self.tail && !self.full
+    pub fn read_and_reset(&mut self) -> T {
+        // Check that read isn't past hop pointer
+        let value = self.buffer[self.read_index];
+        self.buffer[self.read_index] = self.default_value;
+
+        self.read_index = self.increment_index(self.read_index);
+
+        value
     }
 
-    pub fn is_full(&self) -> bool {
-        self.full
-    }
+    pub fn add_value(&mut self, value: T) {
+        //
 
-    pub fn len(&self) -> usize {
-        if self.full {
-            BUFFER_SIZE
-        } else if self.head >= self.tail {
-            self.head - self.tail
-        } else {
-            BUFFER_SIZE - self.tail + self.head
-        }
-    }
-
-    pub fn clear(&mut self) {
-        self.head = 0;
-        self.tail = 0;
-        self.full = false;
-        self.buffer = [T::default(); BUFFER_SIZE];
+        self.buffer[self.write_index] += value;
+        self.write_index = self.increment_index(self.write_index);
     }
 }
 
@@ -96,123 +90,50 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_push_and_pop() {
-        let mut buffer = CircularBuffer::new(5);
-
-        buffer.push(1);
-        buffer.push(2);
-        buffer.push(3);
-
-        assert_eq!(buffer.pop(), Some(1));
-        assert_eq!(buffer.pop(), Some(2));
-        assert_eq!(buffer.pop(), Some(3));
-        assert_eq!(buffer.pop(), None);
+    fn test_initialization() {
+        let buffer: CircularBuffer<f32> = CircularBuffer::new(0.0, None, None);
+        for &item in buffer.buffer.iter() {
+            assert_eq!(item, 0.0);
+        }
     }
 
     #[test]
-    fn test_buffer_wrap_around() {
-        let mut buffer = CircularBuffer::new(5);
+    fn test_write_and_read() {
+        let mut buffer = CircularBuffer::new(0, None, None);
+        buffer.write(1);
+        buffer.write(2);
+        assert_eq!(buffer.read(), 1);
+        assert_eq!(buffer.read(), 2);
+    }
 
+    #[test]
+    fn test_wraparound() {
+        let mut buffer = CircularBuffer::new(0, None, None);
         for i in 0..BUFFER_SIZE {
-            buffer.push(i);
+            buffer.write(i as i32);
         }
-
-        for i in 0..BUFFER_SIZE {
-            assert_eq!(buffer.pop(), Some(i));
-        }
-        assert_eq!(buffer.pop(), None);
+        buffer.write(1024);
+        assert_eq!(buffer.read(), 1024); // Reading the overwritten first element
+        assert_eq!(buffer.write_index, 1);
+        assert_eq!(buffer.read_index, 1);
     }
 
     #[test]
-    fn test_is_empty_and_is_full() {
-        let mut buffer = CircularBuffer::new(5);
-
-        assert!(buffer.is_empty());
-        assert!(!buffer.is_full());
-
-        for i in 0..BUFFER_SIZE {
-            buffer.push(i);
-        }
-
-        assert!(!buffer.is_empty());
-        assert!(buffer.is_full());
-
-        for _ in 0..BUFFER_SIZE {
-            buffer.pop();
-        }
-
-        assert!(buffer.is_empty());
-        assert!(!buffer.is_full());
+    fn test_read_and_reset() {
+        let mut buffer = CircularBuffer::new(0, None, None);
+        buffer.write(1);
+        assert_eq!(buffer.read_and_reset(), 1);
+        assert_eq!(buffer.buffer[0], 0); // Ensure the value is reset to default
     }
 
     #[test]
-    fn test_len() {
-        let mut buffer = CircularBuffer::new(5);
-
-        assert_eq!(buffer.len(), 0);
-
-        for i in 0..5 {
-            buffer.push(i);
-            assert_eq!(buffer.len(), i + 1);
-        }
-
-        for i in 0..5 {
-            buffer.pop();
-            assert_eq!(buffer.len(), 4 - i);
-        }
-    }
-
-    #[test]
-    fn test_clear() {
-        let mut buffer = CircularBuffer::new(5);
-
-        for i in 0..5 {
-            buffer.push(i);
-        }
-
-        buffer.clear();
-
-        assert!(buffer.is_empty());
-        assert_eq!(buffer.len(), 0);
-        assert_eq!(buffer.pop(), None);
-    }
-
-    #[test]
-    fn test_process_window() {
-        // Since process_window is private, we'll need to simulate it by pushing enough items
-        // Create a custom buffer to count how many times process_window is called
-        struct TestBuffer {
-            buffer: CircularBuffer<i32>,
-            process_count: usize,
-        }
-
-        impl TestBuffer {
-            fn new(hop_size: usize) -> Self {
-                TestBuffer {
-                    buffer: CircularBuffer::new(hop_size),
-                    process_count: 0,
-                }
-            }
-
-            fn push(&mut self, item: i32) {
-                self.buffer.push(item);
-                if self.buffer.count == 0 {
-                    self.process_count += 1;
-                }
-            }
-
-            fn process_count(&self) -> usize {
-                self.process_count
-            }
-        }
-
-        let mut test_buffer = TestBuffer::new(5);
-
-        for i in 0..10 {
-            test_buffer.push(i);
-        }
-
-        // process_window should be called twice because hop_size is 5 and we pushed 10 items
-        assert_eq!(test_buffer.process_count(), 2);
+    fn test_add_value() {
+        let mut buffer = CircularBuffer::new(0, None, None);
+        buffer.add_value(1);
+        assert_eq!(buffer.buffer[0], 1);
+        buffer.add_value(2);
+        assert_eq!(buffer.buffer[1], 2);
+        buffer.add_value(3);
+        assert_eq!(buffer.buffer[2], 3);
     }
 }
