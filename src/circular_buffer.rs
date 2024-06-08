@@ -83,11 +83,29 @@ where
         self.buffer[self.write_index] += value;
         self.write_index = self.increment_index(self.write_index);
     }
+
+    pub fn next_hop(&mut self) {
+      let hop_index = (self.hop_pointer + self.hop_size) % self.buffer.len();
+      self.hop_pointer = hop_index;
+      self.write_index = hop_index;
+
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_hop_size() {
+        let mut buffer: CircularBuffer<f32> = CircularBuffer::new(0.0, Some(BUFFER_SIZE - 4), None);
+        assert_eq!(buffer.hop_pointer, BUFFER_SIZE - 4);
+        assert_eq!(buffer.write_index, BUFFER_SIZE - 4);
+        buffer.next_hop();
+        assert_eq!(buffer.write_index, BUFFER_SIZE - 8);
+        assert_eq!(buffer.hop_pointer, BUFFER_SIZE - 8);
+
+    }
 
     #[test]
     fn test_initialization() {

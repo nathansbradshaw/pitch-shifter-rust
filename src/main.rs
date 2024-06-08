@@ -1,13 +1,14 @@
 mod circular_buffer;
 
 use circular_buffer::CircularBuffer;
-use hound::{Sample, WavReader, WavSpec, WavWriter};
-use std::{error::Error, vec};
+use hound::{ WavReader, WavSpec, WavWriter};
+use std::error::Error;
 
 const FFT_SIZE: usize = 512;
 const CHUNK_SIZE: usize = 1024;
 fn main() -> Result<(), Box<dyn Error>> {
-    let path = "WeChooseToGoToTheMoon_f32.wav";
+    let path = "sample_f32.wav";
+    // let path = "WeChooseToGoToTheMoon_f32.wav";
     let mut reader = WavReader::open(path)?;
     let spec = reader.spec();
 
@@ -38,9 +39,7 @@ where
     let output_path = "processed_sample.wav";
     let mut writer = WavWriter::create(output_path, *spec)?;
     let mut buffer_in: CircularBuffer<f32> = CircularBuffer::new(0.0, Some(0), Some(0));
-    let mut window_in = 0;
-    let window_size = 256;
-    let hop_size = 128;
+    let hop_size = 512;
     let mut hop_counter = 0;
     let mut buffer_out: CircularBuffer<f32> = CircularBuffer::new(0.0, Some(hop_size), Some(0));
     
@@ -50,23 +49,24 @@ where
         println!("Sample: {:?}", sample);
 
 
+        // Store the sample in the input buffer
         buffer_in.write(sample);
-        window_in += 1;
-        if(window_in >= window_size) {
-            window_in = 0;
-            // PROCESSES DATA
-            println!("Window Size hit")
-        }
 
+        // Read from the output buffer and reset the value
         let out_sample = buffer_out.read_and_reset();
+
+        // Scale the output dow by the overlap factor
         let scaled_out_sample = out_sample  * (hop_size as f32)/ FFT_SIZE as f32;
-        hop_counter += 1;
+
+        // Increment the hop counter
         if hop_counter >= hop_size {
             hop_counter = 0;
-            process_fft(&mut buffer_in, &mut buffer_out)
-            // TODO FFT stuff 
-
+            process_fft(&mut buffer_in, &mut buffer_out);
+            // update the output buffer write index to the start of the next hop
+            buffer_out.next_hop();
         }
+        hop_counter += 1;
+
 
         writer.write_sample(scaled_out_sample)?;
 
@@ -79,7 +79,7 @@ where
 fn process_fft( in_buffer: &mut CircularBuffer<f32>, out_buffer:&mut CircularBuffer<f32>) {
     let analysis_window_buffer: [f32; FFT_SIZE] = hanning_window();
      let mut unwrapped_buffer: [f32; FFT_SIZE] = [0.0; FFT_SIZE];
-    let mut fft_output_buffer: [microfft::Complex32; FFT_SIZE / 2 + 1] = [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE / 2 + 1];
+     let fft_output_buffer: [microfft::Complex32; FFT_SIZE / 2 + 1] = [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE / 2 + 1];
 
 
     // Apply windowing and read from input buffer
@@ -87,26 +87,18 @@ fn process_fft( in_buffer: &mut CircularBuffer<f32>, out_buffer:&mut CircularBuf
         unwrapped_buffer[n] = in_buffer.read() * analysis_window_buffer[n] as f32;
     }
 
-    let res = microfft::real::rfft_512(&mut unwrapped_buffer);
-    
-    // Process FFT output (e.g., calculate amplitude)
-    for (i, &complex) in fft_output_buffer.iter().enumerate() {
-        let amplitude = (complex.re.powi(2) + complex.im.powi(2)).sqrt(); // Calculate the amplitude
-        // println!("Frequency bin {}: amplitude {:?}", i, amplitude);
-    }
+    let fft = microfft::real::rfft_512(&mut unwrapped_buffer);
     
 
-    for n in res.iter().enumerate() {
-        let amplitude = n;
-        // println!("amplitude {:?}", amplitude);
-    }
-
+    
     // TODO Inverse FFT
-    let res = microfft::inverse::ifft_256( res);
+    let res = microfft::inverse::ifft_256( fft);
     for n in res.iter().enumerate() {
         out_buffer.write(n.1.re)
     }
 }
+
+
 // Function to generate a Hanning window
 fn hanning_window() -> [f32; FFT_SIZE] {
     let mut window = [0.0; FFT_SIZE];
@@ -114,10 +106,6 @@ fn hanning_window() -> [f32; FFT_SIZE] {
         window[n] = 0.5 * (1.0 - (2.0 *  3.14 * n as f32 / (FFT_SIZE - 1) as f32).cos());
     }
     window
-}
-
-fn convert_i16_to_f32(samples: &[i16]) -> Vec<f32> {
-    samples.iter().map(|&sample| sample as f32).collect()
 }
 
 fn convert_f32_array_to_i16(value: f32) ->i16 {
