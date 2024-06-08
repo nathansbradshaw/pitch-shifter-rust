@@ -7,16 +7,13 @@ use std::{error::Error, vec};
 const FFT_SIZE: usize = 512;
 const CHUNK_SIZE: usize = 1024;
 fn main() -> Result<(), Box<dyn Error>> {
-    let path = "WeChooseToGoToTheMoon.wav";
+    let path = "WeChooseToGoToTheMoon_f32.wav";
     let mut reader = WavReader::open(path)?;
     let spec = reader.spec();
 
     match spec.sample_format {
         hound::SampleFormat::Int => {
             match spec.bits_per_sample {
-                8 => read_and_write_samples::<i8>(&mut reader, &spec)?,
-                16 => read_and_write_samples::<i16>(&mut reader, &spec)?,
-                24 => return Err(Box::from("Unsupport bit depth 24")),
                 _ => return Err(Box::from("Unsupported bit depth")),
             }
         },
@@ -46,11 +43,10 @@ where
     let hop_size = 128;
     let mut hop_counter = 0;
     let mut buffer_out: CircularBuffer<f32> = CircularBuffer::new(0.0, Some(hop_size), Some(0));
+    
 
-     let i16_samples: Vec<i16> = reader.samples::<i16>().map(|s| s.unwrap()).collect();
-    let f32_samples = convert_i16_to_f32(&i16_samples);
-
-    for sample in f32_samples {
+    for sample in reader.samples::<f32>() {
+        let sample = sample.expect("Error reading sample");
         println!("Sample: {:?}", sample);
 
 
@@ -72,7 +68,8 @@ where
 
         }
 
-        writer.write_sample(convert_f32_array_to_i16(scaled_out_sample))?;
+        writer.write_sample(scaled_out_sample)?;
+
     }
 
     writer.finalize()?;
@@ -80,7 +77,6 @@ where
 }
 
 fn process_fft( in_buffer: &mut CircularBuffer<f32>, out_buffer:&mut CircularBuffer<f32>) {
-    const BUFFER_SIZE: usize = 1024;
     let analysis_window_buffer: [f32; FFT_SIZE] = hanning_window();
      let mut unwrapped_buffer: [f32; FFT_SIZE] = [0.0; FFT_SIZE];
     let mut fft_output_buffer: [microfft::Complex32; FFT_SIZE / 2 + 1] = [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE / 2 + 1];
