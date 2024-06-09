@@ -8,10 +8,10 @@ use std::error::Error;
 
 const BUFFER_SIZE: usize = 3000;
 const FFT_SIZE: usize = 1024;
-const HOP_SIZE: usize = 512;
+const HOP_SIZE: usize = 256;
 fn main() -> Result<(), Box<dyn Error>> {
     let path = "sample_f32.wav";
-    let path = "WeChooseToGoToTheMoon_f32.wav";
+    // let path = "WeChooseToGoToTheMoon_f32.wav";
     let mut reader = WavReader::open(path)?;
     let spec = reader.spec();
 
@@ -54,7 +54,7 @@ where
         let out_sample = buffer_out.read_and_reset();
 
         // Scale the output dow by the overlap factor
-        let scaled_out_sample = out_sample * 1.2;
+        let scaled_out_sample = out_sample * HOP_SIZE as f32 / FFT_SIZE as f32;
 
         // Increment the hop counter
         if hop_counter >= HOP_SIZE {
@@ -79,10 +79,9 @@ fn process_fft(in_buffer: &mut CircularBuffer<f32, BUFFER_SIZE>, out_buffer: &mu
         [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE]; // Full spectrum array
 
     // copy buffer into FFT input, starting one window ago
-    // in_buffer.push_read_back(HOP_SIZE);
+    in_buffer.push_read_back(FFT_SIZE - HOP_SIZE);
     for n in 0..FFT_SIZE {
-        unwrapped_buffer[n] = in_buffer.read();
-        // unwrapped_buffer[n] = in_buffer.read() * analysis_window_buffer[n]
+        unwrapped_buffer[n] = in_buffer.read() * analysis_window_buffer[n]
     }
 
     // Process the FFT based on the time domain input

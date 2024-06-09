@@ -1,5 +1,3 @@
-const BUFFER_SIZE: usize = 300000;
-
 pub struct CircularBuffer<T, const N: usize> {
     buffer: [T; N],
     read_index: usize,
@@ -68,7 +66,7 @@ where
     }
 
     pub fn push_read_back(&mut self, window_size: usize) {
-        let push_back = ((self.read_index as isize - window_size as isize + BUFFER_SIZE as isize) % BUFFER_SIZE as isize) as usize;
+        let push_back = ((self.read_index as isize - window_size as isize + self.buffer.len() as isize) % self.buffer.len() as isize) as usize;
         println!("read index before {}, {}, after {}",window_size ,self.read_index, push_back);
         self.read_index = push_back;
     }

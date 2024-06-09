@@ -1,8 +1,10 @@
 use libm::cosf;
 
-
+#[allow(dead_code)]
 const FFT_SIZE: usize = 1024;
+#[allow(dead_code)]
 const PI: f32 = 3.14159265358979323846264338327950288f32;
+#[allow(dead_code)]
 pub fn generate_hanning_window() -> [f32; FFT_SIZE] {
     
     let mut window = [0.0; FFT_SIZE];
