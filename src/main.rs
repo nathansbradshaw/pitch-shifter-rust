@@ -4,8 +4,7 @@ use circular_buffer::CircularBuffer;
 use hound::{ WavReader, WavSpec, WavWriter};
 use std::error::Error;
 
-const FFT_SIZE: usize = 512;
-const CHUNK_SIZE: usize = 1024;
+const FFT_SIZE: usize = 1024;
 fn main() -> Result<(), Box<dyn Error>> {
     let path = "sample_f32.wav";
     // let path = "WeChooseToGoToTheMoon_f32.wav";
@@ -36,12 +35,16 @@ fn read_and_write_samples<S>(
 where
     S: hound::Sample + std::fmt::Debug + hound::Sample,
 {
+    let output_spec = WavSpec {
+        ..*spec
+    };
+
     let output_path = "processed_sample.wav";
-    let mut writer = WavWriter::create(output_path, *spec)?;
-    let mut buffer_in: CircularBuffer<f32> = CircularBuffer::new(0.0, Some(0), Some(0));
-    let hop_size = 512;
+    let mut writer = WavWriter::create(output_path, output_spec)?;
+    let mut buffer_in: CircularBuffer<f32> = CircularBuffer::new(0.0, Some(0));
+    let hop_size = 1000;
     let mut hop_counter = 0;
-    let mut buffer_out: CircularBuffer<f32> = CircularBuffer::new(0.0, Some(hop_size), Some(0));
+    let mut buffer_out: CircularBuffer<f32> = CircularBuffer::new(0.0, Some(hop_size));
     
 
     for sample in reader.samples::<f32>() {
@@ -66,8 +69,6 @@ where
             buffer_out.next_hop();
         }
         hop_counter += 1;
-
-
         writer.write_sample(scaled_out_sample)?;
 
     }
@@ -79,22 +80,35 @@ where
 fn process_fft( in_buffer: &mut CircularBuffer<f32>, out_buffer:&mut CircularBuffer<f32>) {
     let analysis_window_buffer: [f32; FFT_SIZE] = hanning_window();
      let mut unwrapped_buffer: [f32; FFT_SIZE] = [0.0; FFT_SIZE];
-     let fft_output_buffer: [microfft::Complex32; FFT_SIZE / 2 + 1] = [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE / 2 + 1];
+     let mut full_spectrum: [microfft::Complex32; FFT_SIZE] = [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE]; // Full spectrum array
 
 
-    // Apply windowing and read from input buffer
-    for n in 0..FFT_SIZE {
-        unwrapped_buffer[n] = in_buffer.read() * analysis_window_buffer[n] as f32;
-    }
 
-    let fft = microfft::real::rfft_512(&mut unwrapped_buffer);
+     // copy buffer into FFT input, starting one window ago
+     in_buffer.push_read_back(FFT_SIZE);
+     for n in 0..FFT_SIZE {
+        unwrapped_buffer[n] = in_buffer.read()
+     }
+
+
+     // Process the FFT based on the time domain input
+    let fft = microfft::real::rfft_1024(&mut unwrapped_buffer);
     
 
+        // Reconstruct the full spectrum for the IFFT
+        for i in 0..(FFT_SIZE / 2 ) {
+            full_spectrum[i] = fft[i]; // First half directly
+            if i > 0 && i < (FFT_SIZE / 2) {
+                full_spectrum[FFT_SIZE - i] = fft[i].conj(); // Conjugate symmetry for the second half
+            }
+        }
     
-    // TODO Inverse FFT
-    let res = microfft::inverse::ifft_256( fft);
+     // Run the inverse FFT 
+     let res = microfft::inverse::ifft_1024(&mut full_spectrum);
+
+    // Add time domain into the output buffer 
     for n in res.iter().enumerate() {
-        out_buffer.write(n.1.re)
+        out_buffer.add_value(n.1.re)
     }
 }
 
@@ -106,9 +120,4 @@ fn hanning_window() -> [f32; FFT_SIZE] {
         window[n] = 0.5 * (1.0 - (2.0 *  3.14 * n as f32 / (FFT_SIZE - 1) as f32).cos());
     }
     window
-}
-
-fn convert_f32_array_to_i16(value: f32) ->i16 {
-        let clamped_value = value.clamp(i16::MIN as f32, i16::MAX as f32);
-        clamped_value.round() as i16
 }

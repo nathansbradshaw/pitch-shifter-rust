@@ -1,14 +1,11 @@
-const BUFFER_SIZE: usize = 1024;
-use core::ops::AddAssign;
-use std::slice::Windows;
+const BUFFER_SIZE: usize = 2048;
+
 pub struct CircularBuffer<T> {
     buffer: [T; BUFFER_SIZE],
     read_index: usize,
     write_index: usize,
-    next_window_index: usize,
     hop_pointer: usize,
     hop_size: usize,
-    window_size: usize,
     default_value: T,
 }
 
@@ -19,25 +16,18 @@ where
     pub fn new(
         default_value: T,
         hop_size: Option<usize>,
-        window_size: Option<usize>,
     ) -> CircularBuffer<T> {
         let hop_size = match hop_size {
             Some(value) => value,
             None => 0,
         };
 
-        let window_size = match window_size {
-            Some(value) => value,
-            None => 0,
-        };
 
         CircularBuffer {
             buffer: [default_value; BUFFER_SIZE],
             read_index: 0,
             write_index: hop_size,
-            next_window_index: 0,
             hop_size: hop_size,
-            window_size,
             hop_pointer: hop_size,
             default_value,
         }
@@ -90,6 +80,10 @@ where
       self.write_index = hop_index;
 
     }
+
+    pub fn push_read_back(&mut self, window_size: usize) {
+        self.read_index = self.read_index.wrapping_sub(window_size) % self.buffer.len();
+    }
 }
 
 #[cfg(test)]
@@ -97,8 +91,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn window_push_back() {
+        let mut buffer: CircularBuffer<f32> = CircularBuffer::new(0.0, Some(BUFFER_SIZE - 4));
+        assert_eq!(buffer.read_index, 0);
+        buffer.push_read_back(1);
+        assert_eq!(buffer.read_index, BUFFER_SIZE -1);
+        buffer.read();
+        buffer.read();
+        assert_eq!(buffer.read_index, 1);
+        buffer.push_read_back(12);
+        assert_eq!(buffer.read_index, BUFFER_SIZE -11);
+    }
+
+    #[test]
     fn test_hop_size() {
-        let mut buffer: CircularBuffer<f32> = CircularBuffer::new(0.0, Some(BUFFER_SIZE - 4), None);
+        let mut buffer: CircularBuffer<f32> = CircularBuffer::new(0.0, Some(BUFFER_SIZE - 4));
         assert_eq!(buffer.hop_pointer, BUFFER_SIZE - 4);
         assert_eq!(buffer.write_index, BUFFER_SIZE - 4);
         buffer.next_hop();
@@ -109,7 +116,7 @@ mod tests {
 
     #[test]
     fn test_initialization() {
-        let buffer: CircularBuffer<f32> = CircularBuffer::new(0.0, None, None);
+        let buffer: CircularBuffer<f32> = CircularBuffer::new(0.0, None);
         for &item in buffer.buffer.iter() {
             assert_eq!(item, 0.0);
         }
@@ -117,7 +124,7 @@ mod tests {
 
     #[test]
     fn test_write_and_read() {
-        let mut buffer = CircularBuffer::new(0, None, None);
+        let mut buffer = CircularBuffer::new(0, None);
         buffer.write(1);
         buffer.write(2);
         assert_eq!(buffer.read(), 1);
@@ -126,7 +133,7 @@ mod tests {
 
     #[test]
     fn test_wraparound() {
-        let mut buffer = CircularBuffer::new(0, None, None);
+        let mut buffer = CircularBuffer::new(0, None);
         for i in 0..BUFFER_SIZE {
             buffer.write(i as i32);
         }
@@ -138,7 +145,7 @@ mod tests {
 
     #[test]
     fn test_read_and_reset() {
-        let mut buffer = CircularBuffer::new(0, None, None);
+        let mut buffer = CircularBuffer::new(0, None);
         buffer.write(1);
         assert_eq!(buffer.read_and_reset(), 1);
         assert_eq!(buffer.buffer[0], 0); // Ensure the value is reset to default
@@ -146,7 +153,7 @@ mod tests {
 
     #[test]
     fn test_add_value() {
-        let mut buffer = CircularBuffer::new(0, None, None);
+        let mut buffer = CircularBuffer::new(0, None);
         buffer.add_value(1);
         assert_eq!(buffer.buffer[0], 1);
         buffer.add_value(2);
