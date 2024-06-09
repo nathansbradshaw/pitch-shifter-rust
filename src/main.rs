@@ -8,6 +8,7 @@ use std::error::Error;
 
 
 const FFT_SIZE: usize = 1024;
+const HOP_SIZE: usize = 256;
 fn main() -> Result<(), Box<dyn Error>> {
     let path = "sample_f32.wav";
     let path = "WeChooseToGoToTheMoon_f32.wav";
@@ -39,9 +40,8 @@ where
     let output_path = "processed_sample.wav";
     let mut writer = WavWriter::create(output_path, output_spec)?;
     let mut buffer_in: CircularBuffer<f32> = CircularBuffer::new(0.0, Some(0));
-    let hop_size = 256;
     let mut hop_counter = 0;
-    let mut buffer_out: CircularBuffer<f32> = CircularBuffer::new(0.0, Some(hop_size));
+    let mut buffer_out: CircularBuffer<f32> = CircularBuffer::new(0.0, Some(HOP_SIZE));
 
     for sample in reader.samples::<f32>() {
         let sample = sample.expect("Error reading sample");
@@ -54,10 +54,10 @@ where
         let out_sample = buffer_out.read_and_reset();
 
         // Scale the output dow by the overlap factor
-        let scaled_out_sample = out_sample;
+        let scaled_out_sample = out_sample * 1.2;
 
         // Increment the hop counter
-        if hop_counter >= hop_size {
+        if hop_counter >= HOP_SIZE {
             hop_counter = 0;
             process_fft(&mut buffer_in, &mut buffer_out);
             // update the output buffer write index to the start of the next hop
@@ -79,7 +79,7 @@ fn process_fft(in_buffer: &mut CircularBuffer<f32>, out_buffer: &mut CircularBuf
         [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE]; // Full spectrum array
 
     // copy buffer into FFT input, starting one window ago
-    in_buffer.push_read_back(FFT_SIZE);
+    in_buffer.push_read_back(HOP_SIZE);
     for n in 0..FFT_SIZE {
         unwrapped_buffer[n] = in_buffer.read() * analysis_window_buffer[n]
     }

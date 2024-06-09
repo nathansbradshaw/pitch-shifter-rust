@@ -1,4 +1,4 @@
-const BUFFER_SIZE: usize = 17000;
+const BUFFER_SIZE: usize = 30000;
 
 pub struct CircularBuffer<T> {
     buffer: [T; BUFFER_SIZE],
