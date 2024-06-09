@@ -1,4 +1,4 @@
-const BUFFER_SIZE: usize = 2048;
+const BUFFER_SIZE: usize = 17000;
 
 pub struct CircularBuffer<T> {
     buffer: [T; BUFFER_SIZE],
@@ -11,7 +11,7 @@ pub struct CircularBuffer<T> {
 
 impl<T> CircularBuffer<T>
 where
-    T: Copy + core::ops::AddAssign,
+    T: Copy + core::ops::AddAssign +std::fmt::Debug,
 {
     pub fn new(
         default_value: T,
@@ -68,21 +68,22 @@ where
     }
 
     pub fn add_value(&mut self, value: T) {
-        //
-
         self.buffer[self.write_index] += value;
         self.write_index = self.increment_index(self.write_index);
     }
 
     pub fn next_hop(&mut self) {
       let hop_index = (self.hop_pointer + self.hop_size) % self.buffer.len();
+      println!("index before hop {}, after {}", self.hop_pointer, hop_index);
       self.hop_pointer = hop_index;
       self.write_index = hop_index;
 
     }
 
     pub fn push_read_back(&mut self, window_size: usize) {
-        self.read_index = self.read_index.wrapping_sub(window_size) % self.buffer.len();
+        let push_back = ((self.read_index as isize - window_size as isize + BUFFER_SIZE as isize) % BUFFER_SIZE as isize) as usize;
+        println!("read index before {}, {}, after {}",window_size ,self.read_index, push_back);
+        self.read_index = push_back;
     }
 }
 
