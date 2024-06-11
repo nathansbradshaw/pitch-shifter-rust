@@ -59,7 +59,6 @@ where
 
     pub fn next_hop(&mut self) {
       let hop_index = (self.hop_pointer + self.hop_size) % self.buffer.len();
-      println!("index before hop {}, after {}", self.hop_pointer, hop_index);
       self.hop_pointer = hop_index;
       self.write_index = hop_index;
 
@@ -67,7 +66,6 @@ where
 
     pub fn push_read_back(&mut self, window_size: usize) {
         let push_back = ((self.read_index as isize - window_size as isize + self.buffer.len() as isize) % self.buffer.len() as isize) as usize;
-        println!("read index before {}, {}, after {}",window_size ,self.read_index, push_back);
         self.read_index = push_back;
     }
 }
