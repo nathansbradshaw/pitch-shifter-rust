@@ -4,6 +4,7 @@ mod hann_window;
 use circular_buffer::CircularBuffer;
 
 use hound::{WavReader, WavSpec, WavWriter};
+use libm::{powf, sqrtf};
 use std::error::Error;
 
 const BUFFER_SIZE: usize = 3000;
@@ -87,18 +88,18 @@ fn process_fft(in_buffer: &mut CircularBuffer<f32, BUFFER_SIZE>, out_buffer: &mu
     // Process the FFT based on the time domain input
     let fft = microfft::real::rfft_1024(&mut unwrapped_buffer);
 
+        // Robot the sound 
+        let robit_sound =  fft.map(|i|
+            {microfft::Complex32 {re: sqrtf( i.re * i.re + i.im  * i.im), im: 0.0}}
+         );
+
     // Reconstruct the full spectrum for the IFFT
     for i in 0..(FFT_SIZE / 2) {
-        full_spectrum[i] = fft[i]; // First half directly
+        full_spectrum[i] = robit_sound[i]; // First half directly
         if i > 0 && i < (FFT_SIZE / 2) {
-            full_spectrum[FFT_SIZE - i] = fft[i].conj(); // Conjugate symmetry for the second half
+            full_spectrum[FFT_SIZE - i] = robit_sound[i].conj(); // Conjugate symmetry for the second half
         }
     }
-
-    // Robot the sound 
-    // for i in 0..FFT_SIZE {
-    //     let amplitude:f32 = 
-    // }
 
     // Run the inverse FFT
     let res = microfft::inverse::ifft_1024(&mut full_spectrum);
@@ -109,5 +110,3 @@ fn process_fft(in_buffer: &mut CircularBuffer<f32, BUFFER_SIZE>, out_buffer: &mu
         out_buffer.add_value(windowed_val);
     }
 }
-
-// Function to generate a Hanning window

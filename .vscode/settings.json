@@ -3,7 +3,11 @@
         "hann",
         "hanning",
         "IFFT",
+        "libm",
         "microfft",
-        "rfft"
+        "powf",
+        "rfft",
+        "robit",
+        "sqrtf"
     ]
 }
