@@ -1,13 +1,18 @@
 {
     "cSpell.words": [
+        "cosf",
+        "fmodf",
         "hann",
         "hanning",
         "IFFT",
         "libm",
         "microfft",
+        "Nyquist",
         "powf",
         "rfft",
         "robit",
+        "robotisation",
+        "sinf",
         "sqrtf"
     ]
 }
