@@ -2,20 +2,20 @@ mod circular_buffer;
 mod hann_window;
 
 use circular_buffer::CircularBuffer;
-
 use hound::{WavReader, WavSpec, WavWriter};
 use libm::{atan2f, cosf, floorf, fmodf, sinf, sqrtf};
 use std::error::Error;
+use std::sync::{Arc, Mutex};
+use std::thread;
 const PI: f32 = 3.14159265358979323846264338327950288f32;
-const BUFFER_SIZE: usize = 3000;
+const BUFFER_SIZE: usize = 100000;
 const FFT_SIZE: usize = 1024;
 const HOP_SIZE: usize = 128;
-const SCALE_FACTOR: f32 = 0.5;
-const PITCH_SHIFT: f32 = -1.0;
+const PITCH_SHIFT: f32 = 1.5;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let path = "sample_f32.wav";
-    let path = "WeChooseToGoToTheMoon_f32.wav";
+    // let path = "WeChooseToGoToTheMoon_f32.wav";
     let mut reader = WavReader::open(path)?;
     let spec = reader.spec();
 
@@ -43,40 +43,53 @@ where
 
     let output_path = "processed_sample.wav";
     let mut writer = WavWriter::create(output_path, output_spec)?;
-    let mut buffer_in: CircularBuffer<f32, BUFFER_SIZE> = CircularBuffer::new(0.0, Some(0));
     let mut hop_counter = 0;
-    let mut buffer_out: CircularBuffer<f32, BUFFER_SIZE> = CircularBuffer::new(0.0, Some(HOP_SIZE));
-
-    let mut last_input_phases = [0.0; FFT_SIZE];
-    let mut last_output_phases = [0.0; FFT_SIZE];
-    let mut bin_frequencies = [0.0; FFT_SIZE / 2];
+    // Wrap shared resources with Arc<Mutex<T>>
+    let buffer_in = Arc::new(Mutex::new(CircularBuffer::new(0.0, Some(0))));
+    let buffer_out = Arc::new(Mutex::new(CircularBuffer::new(0.0, Some(HOP_SIZE))));
 
     for sample in reader.samples::<f32>() {
         let sample = sample.expect("Error reading sample");
-        // println!("Sample: {:?}", sample);
-
         // Store the sample in the input buffer
-        buffer_in.write(sample);
+        {
+            let mut buffer_in = buffer_in.lock().unwrap();
+            buffer_in.write(sample);
+        }
 
         // Read from the output buffer and reset the value
-        let out_sample = buffer_out.read_and_reset();
+        let scaled_out_sample = {
+            let mut buffer_out = buffer_out.lock().unwrap();
+            let out_sample = buffer_out.read_and_reset();
+            out_sample * HOP_SIZE as f32 / FFT_SIZE as f32
+        };
 
-        // Scale the output dow by the overlap factor
-        let scaled_out_sample = out_sample * HOP_SIZE as f32 / FFT_SIZE as f32;
-
-        // Increment the hop counter
         if hop_counter >= HOP_SIZE {
             hop_counter = 0;
-            process_fft(
-                &mut buffer_in,
-                &mut buffer_out,
-                &mut last_input_phases,
-                &mut last_output_phases,
-                &mut bin_frequencies,
-            );
-            // update the output buffer write index to the start of the next hop
-            // println!("-------- NEW HOP ------------------------");
-            buffer_out.next_hop();
+
+            // Clone the Arc<Mutex<>> for the new thread
+            let buffer_in_clone = Arc::clone(&buffer_in);
+            let buffer_out_clone = Arc::clone(&buffer_out);
+
+            // Spawn a new thread for processing FFT
+            thread::spawn(move || {
+                let mut last_input_phases = [0.0; FFT_SIZE];
+                let mut last_output_phases = [0.0; FFT_SIZE];
+                let mut bin_frequencies = [0.0; FFT_SIZE / 2];
+
+                {
+                    let mut in_buf = buffer_in_clone.lock().unwrap();
+                    let mut out_buf = buffer_out_clone.lock().unwrap();
+
+                    process_fft(
+                        &mut in_buf,
+                        &mut out_buf,
+                        &mut last_input_phases,
+                        &mut last_output_phases,
+                        &mut bin_frequencies,
+                    );
+                    out_buf.next_hop();
+                }
+            });
         }
         hop_counter += 1;
         writer.write_sample(scaled_out_sample)?;
@@ -104,10 +117,10 @@ fn process_fft(
     let mut synthesis_frequencies = [0.0; FFT_SIZE / 2];
     let mut synthesis_count = [0; FFT_SIZE / 2];
 
-    // copy buffer into FFT input, starting one window ago
+    // Copy buffer into FFT input, starting one window ago
     in_buffer.push_read_back(FFT_SIZE - HOP_SIZE);
     for n in 0..FFT_SIZE {
-        unwrapped_buffer[n] = in_buffer.read() * analysis_window_buffer[n]
+        unwrapped_buffer[n] = in_buffer.read() * analysis_window_buffer[n];
     }
 
     // Process the FFT based on the time domain input
@@ -144,7 +157,7 @@ fn process_fft(
 
     // Handle the pitch shift, storing frequencies into new bins
     for i in 0..FFT_SIZE / 2 {
-        // find the nearest bin to the shifted frequency
+        // Find the nearest bin to the shifted frequency
         let new_bin = floorf(i as f32  * PITCH_SHIFT + 0.5) as usize;
 
         // Ignore any bins that have shifted above Nyquist
@@ -161,9 +174,9 @@ fn process_fft(
 
         let bin_deviation = synthesis_frequencies[i] - i as f32;
         // Multiply to get back to a phase value
-        let mut phase_diff = bin_deviation * 2.0 * PI * HOP_SIZE as f32 /FFT_SIZE as f32;
+        let mut phase_diff = bin_deviation * 2.0 * PI * HOP_SIZE as f32 / FFT_SIZE as f32;
         // Add the expected phase increment based on the bin centre frequency
-        let bin_centre_frequency = 2.0 * PI * i as f32 /FFT_SIZE as f32;
+        let bin_centre_frequency = 2.0 * PI * i as f32 / FFT_SIZE as f32;
         phase_diff += bin_centre_frequency * HOP_SIZE as f32;
         // Advance the phase from the previous hop
         let out_phase = wrap_phase(last_output_phases[i] + phase_diff);
