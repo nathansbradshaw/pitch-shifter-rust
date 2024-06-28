@@ -44,31 +44,71 @@ where
     let output_path = "processed_sample.wav";
     let mut writer = WavWriter::create(output_path, output_spec)?;
     let mut hop_counter = 0;
+
     // Wrap shared resources with Arc<Mutex<T>>
-    let buffer_in = Arc::new(Mutex::new(CircularBuffer::new(0.0, Some(0))));
-    let buffer_out = Arc::new(Mutex::new(CircularBuffer::new(0.0, Some(HOP_SIZE))));
+    let buffer_in = Arc::new(Mutex::new([0.0; BUFFER_SIZE]));
+    let buffer_out = Arc::new(Mutex::new([0.0; BUFFER_SIZE]));
+
+    let in_buffer_pointer = Arc::new(Mutex::new(0));
+    let cached_in_buffer_pointer = Arc::new(Mutex::new(0));
+    // Start the write pointer ahead of the read pointer by at least window + hop, with some margin
+    let out_buffer_write_pointer = Arc::new(Mutex::new(BUFFER_SIZE + 2 * HOP_SIZE));
+    let out_buffer_reader_pointer = Arc::new(Mutex::new(0));
 
     for sample in reader.samples::<f32>() {
         let sample = sample.expect("Error reading sample");
-        // Store the sample in the input buffer
+
+        // Store the sample ("in") in a buffer for the FFT
+        // Increment the pointer and when full window has been
+        // assembled, call process_fft()
+        // NOTE FOR ENOCH - This is done in {} because rust will automatically unlock these resources when the program leaves the scope.
         {
             let mut buffer_in = buffer_in.lock().unwrap();
-            buffer_in.write(sample);
+            let mut in_buff_ptr = in_buffer_pointer.lock().unwrap();
+            buffer_in[*in_buff_ptr] = sample;
+            *in_buff_ptr += 1;
+            if *in_buff_ptr >= BUFFER_SIZE {
+                // Wrap the circular buffer
+                // Notice: this is not the condition for starting a new FFT
+                *in_buff_ptr = 0;
+            }
         }
 
-        // Read from the output buffer and reset the value
+        // Get the output sample from the output buffer
         let scaled_out_sample = {
             let mut buffer_out = buffer_out.lock().unwrap();
-            let out_sample = buffer_out.read_and_reset();
-            out_sample * HOP_SIZE as f32 / FFT_SIZE as f32
+            let mut out_read_ptr = out_buffer_reader_pointer.lock().unwrap();
+            let out = buffer_out[*out_read_ptr];
+
+            // Then clear the output sample in the buffer so it is ready for the next overlap-add
+            buffer_out[*out_read_ptr] = 0.0;
+
+            // Increment the read pointer in the output cicular buffer
+            *out_read_ptr += 1;
+            if *out_read_ptr >= BUFFER_SIZE {
+                *out_read_ptr = 0;
+            }
+
+            // Scale the output down by the scale factor, compensating for the overlap
+            out * HOP_SIZE as f32 / FFT_SIZE as f32
         };
 
+        // Increment the hop counter and start a new FFT if we've reached the hop size
         if hop_counter >= HOP_SIZE {
             hop_counter = 0;
 
             // Clone the Arc<Mutex<>> for the new thread
             let buffer_in_clone = Arc::clone(&buffer_in);
             let buffer_out_clone = Arc::clone(&buffer_out);
+            let out_write_ptr = Arc::clone(&out_buffer_write_pointer);
+            let input_ptr = {
+                let in_buff_ptr = in_buffer_pointer.lock().unwrap();
+                *in_buff_ptr
+            };
+            let output_ptr = {
+                let out_buff_ptr = out_write_ptr.lock().unwrap().clone();
+                out_buff_ptr
+            };
 
             // Spawn a new thread for processing FFT
             thread::spawn(move || {
@@ -86,8 +126,15 @@ where
                         &mut last_input_phases,
                         &mut last_output_phases,
                         &mut bin_frequencies,
+                        input_ptr,
+                        output_ptr
                     );
-                    out_buf.next_hop();
+                    	// Update the output buffer write pointer to start at the next hop
+                    {
+                        let mut out_buff_ptr = out_write_ptr.lock().unwrap();
+                        *out_buff_ptr = (*out_buff_ptr + HOP_SIZE) % BUFFER_SIZE
+                    }
+                    // out_buf.next_hop();
                 }
             });
         }
@@ -100,11 +147,13 @@ where
 }
 
 fn process_fft(
-    in_buffer: &mut CircularBuffer<f32, BUFFER_SIZE>,
-    out_buffer: &mut CircularBuffer<f32, BUFFER_SIZE>,
+    in_buffer: &mut [f32; BUFFER_SIZE],
+    out_buffer: &mut [f32; BUFFER_SIZE],
     last_input_phases: &mut [f32; FFT_SIZE],
     last_output_phases: &mut [f32; FFT_SIZE],
     bin_frequencies: &mut [f32; FFT_SIZE / 2],
+    input_pointer: usize,
+    output_pointer: usize,
 ) {
     let analysis_window_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
 
@@ -118,9 +167,10 @@ fn process_fft(
     let mut synthesis_count = [0; FFT_SIZE / 2];
 
     // Copy buffer into FFT input, starting one window ago
-    in_buffer.push_read_back(FFT_SIZE - HOP_SIZE);
+
     for n in 0..FFT_SIZE {
-        unwrapped_buffer[n] = in_buffer.read() * analysis_window_buffer[n];
+        let circular_buffer_index = (input_pointer + n - FFT_SIZE + BUFFER_SIZE) % BUFFER_SIZE;
+        unwrapped_buffer[n] = in_buffer[circular_buffer_index] * analysis_window_buffer[n];
     }
 
     // Process the FFT based on the time domain input
@@ -158,7 +208,7 @@ fn process_fft(
     // Handle the pitch shift, storing frequencies into new bins
     for i in 0..FFT_SIZE / 2 {
         // Find the nearest bin to the shifted frequency
-        let new_bin = floorf(i as f32  * PITCH_SHIFT + 0.5) as usize;
+        let new_bin = floorf(i as f32 * PITCH_SHIFT + 0.5) as usize;
 
         // Ignore any bins that have shifted above Nyquist
         if new_bin < FFT_SIZE / 2 {
@@ -203,8 +253,9 @@ fn process_fft(
 
     // Add time domain into the output buffer
     for (n, val) in res.iter().enumerate() {
+        let circular_buffer_index = (output_pointer + n - FFT_SIZE + BUFFER_SIZE) % BUFFER_SIZE;
         let windowed_val = val.re * analysis_window_buffer[n]; // Window again and scale
-        out_buffer.add_value(windowed_val);
+        out_buffer[circular_buffer_index] += windowed_val;
     }
 }
 
