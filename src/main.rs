@@ -8,14 +8,14 @@ use std::error::Error;
 use std::sync::{Arc, Mutex};
 use std::thread;
 const PI: f32 = 3.14159265358979323846264338327950288f32;
-const BUFFER_SIZE: usize = 100000;
-const FFT_SIZE: usize = 1024;
+const BUFFER_SIZE: usize = 3000;
+const WINDOW_SIZE: usize = 1024;
 const HOP_SIZE: usize = 128;
 const PITCH_SHIFT: f32 = 1.5;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let path = "sample_f32.wav";
-    // let path = "WeChooseToGoToTheMoon_f32.wav";
+    //let path = "sample_f32.wav";
+    let path = "WeChooseToGoToTheMoon_f32.wav";
     let mut reader = WavReader::open(path)?;
     let spec = reader.spec();
 
@@ -60,7 +60,7 @@ where
         let scaled_out_sample = {
             let mut buffer_out = buffer_out.lock().unwrap();
             let out_sample = buffer_out.read_and_reset();
-            out_sample * HOP_SIZE as f32 / FFT_SIZE as f32
+            out_sample * HOP_SIZE as f32 / WINDOW_SIZE as f32
         };
 
         if hop_counter >= HOP_SIZE {
@@ -72,9 +72,9 @@ where
 
             // Spawn a new thread for processing FFT
             thread::spawn(move || {
-                let mut last_input_phases = [0.0; FFT_SIZE];
-                let mut last_output_phases = [0.0; FFT_SIZE];
-                let mut bin_frequencies = [0.0; FFT_SIZE / 2];
+                let mut last_input_phases = [0.0; WINDOW_SIZE];
+                let mut last_output_phases = [0.0; WINDOW_SIZE];
+                let mut bin_frequencies = [0.0; WINDOW_SIZE / 2];
 
                 {
                     let mut in_buf = buffer_in_clone.lock().unwrap();
@@ -102,24 +102,24 @@ where
 fn process_fft(
     in_buffer: &mut CircularBuffer<f32, BUFFER_SIZE>,
     out_buffer: &mut CircularBuffer<f32, BUFFER_SIZE>,
-    last_input_phases: &mut [f32; FFT_SIZE],
-    last_output_phases: &mut [f32; FFT_SIZE],
-    bin_frequencies: &mut [f32; FFT_SIZE / 2],
+    last_input_phases: &mut [f32; WINDOW_SIZE],
+    last_output_phases: &mut [f32; WINDOW_SIZE],
+    bin_frequencies: &mut [f32; WINDOW_SIZE / 2],
 ) {
-    let analysis_window_buffer: [f32; FFT_SIZE] = hann_window::HANN_WINDOW;
+    let analysis_window_buffer: [f32; WINDOW_SIZE] = hann_window::HANN_WINDOW;
 
-    let mut unwrapped_buffer: [f32; FFT_SIZE] = [0.0; FFT_SIZE];
-    let mut full_spectrum: [microfft::Complex32; FFT_SIZE] =
-        [microfft::Complex32 { re: 0.0, im: 0.0 }; FFT_SIZE];
-    let mut analysis_magnitudes = [0.0; FFT_SIZE / 2];
-    let mut analysis_frequencies = [0.0; FFT_SIZE / 2];
-    let mut synthesis_magnitudes = [0.0; FFT_SIZE / 2];
-    let mut synthesis_frequencies = [0.0; FFT_SIZE / 2];
-    let mut synthesis_count = [0; FFT_SIZE / 2];
+    let mut unwrapped_buffer: [f32; WINDOW_SIZE] = [0.0; WINDOW_SIZE];
+    let mut full_spectrum: [microfft::Complex32; WINDOW_SIZE] =
+        [microfft::Complex32 { re: 0.0, im: 0.0 }; WINDOW_SIZE];
+    let mut analysis_magnitudes = [0.0; WINDOW_SIZE / 2];
+    let mut analysis_frequencies = [0.0; WINDOW_SIZE / 2];
+    let mut synthesis_magnitudes = [0.0; WINDOW_SIZE / 2];
+    let mut synthesis_frequencies = [0.0; WINDOW_SIZE / 2];
+    let mut synthesis_count = [0; WINDOW_SIZE / 2];
 
     // Copy buffer into FFT input, starting one window ago
-    in_buffer.push_read_back(FFT_SIZE - HOP_SIZE);
-    for n in 0..FFT_SIZE {
+    in_buffer.push_read_pointer_back(WINDOW_SIZE);
+    for n in 0..WINDOW_SIZE {
         unwrapped_buffer[n] = in_buffer.read() * analysis_window_buffer[n];
     }
 
@@ -139,11 +139,11 @@ fn process_fft(
         // Subtract the amount of phase increment we'd expect to see based
         // on the centre frequency of this bin (2*pi*n/gFftSize) for this
         // hop size, then wrap to the range -pi to pi
-        let bin_centre_frequency = 2.0 * PI * i as f32 / FFT_SIZE as f32;
+        let bin_centre_frequency = 2.0 * PI * i as f32 / WINDOW_SIZE as f32;
         phase_diff = wrap_phase(phase_diff - bin_centre_frequency * HOP_SIZE as f32);
 
         // Find deviation from the centre frequency
-        let bin_deviation = phase_diff * FFT_SIZE as f32 / HOP_SIZE as f32 / (2.0 * PI);
+        let bin_deviation = phase_diff * WINDOW_SIZE as f32 / HOP_SIZE as f32 / (2.0 * PI);
 
         // Add the original bin number to get the fractional bin where this partial belongs
         analysis_frequencies[i] = i as f32 + bin_deviation;
@@ -156,27 +156,27 @@ fn process_fft(
     // Zero out the synthesis bins, ready for new data (NOT done since it should already be zero)
 
     // Handle the pitch shift, storing frequencies into new bins
-    for i in 0..FFT_SIZE / 2 {
+    for i in 0..WINDOW_SIZE / 2 {
         // Find the nearest bin to the shifted frequency
         let new_bin = floorf(i as f32  * PITCH_SHIFT + 0.5) as usize;
 
         // Ignore any bins that have shifted above Nyquist
-        if new_bin < FFT_SIZE / 2 {
+        if new_bin < WINDOW_SIZE / 2 {
             synthesis_magnitudes[new_bin] += analysis_magnitudes[i];
             synthesis_frequencies[new_bin] = analysis_frequencies[i] * PITCH_SHIFT;
         }
     }
 
     // SYNTHESIS
-    for i in 0..FFT_SIZE / 2 {
+    for i in 0..WINDOW_SIZE / 2 {
         let amplitude = synthesis_magnitudes[i];
         // Get the fractional offset from the bin centre frequency
 
         let bin_deviation = synthesis_frequencies[i] - i as f32;
         // Multiply to get back to a phase value
-        let mut phase_diff = bin_deviation * 2.0 * PI * HOP_SIZE as f32 / FFT_SIZE as f32;
+        let mut phase_diff = bin_deviation * 2.0 * PI * HOP_SIZE as f32 / WINDOW_SIZE as f32;
         // Add the expected phase increment based on the bin centre frequency
-        let bin_centre_frequency = 2.0 * PI * i as f32 / FFT_SIZE as f32;
+        let bin_centre_frequency = 2.0 * PI * i as f32 / WINDOW_SIZE as f32;
         phase_diff += bin_centre_frequency * HOP_SIZE as f32;
         // Advance the phase from the previous hop
         let out_phase = wrap_phase(last_output_phases[i] + phase_diff);
@@ -191,10 +191,10 @@ fn process_fft(
     }
 
     // Reconstruct the full spectrum for the IFFT
-    for i in 0..(FFT_SIZE / 2) {
+    for i in 0..(WINDOW_SIZE / 2) {
         full_spectrum[i] = fft[i]; // First half directly
-        if i > 0 && i < (FFT_SIZE / 2) {
-            full_spectrum[FFT_SIZE - i] = fft[i].conj(); // Conjugate symmetry for the second half
+        if i > 0 && i < (WINDOW_SIZE / 2) {
+            full_spectrum[WINDOW_SIZE - i] = fft[i].conj(); // Conjugate symmetry for the second half
         }
     }
 
