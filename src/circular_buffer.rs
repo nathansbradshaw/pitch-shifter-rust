@@ -165,40 +165,53 @@ mod tests {
     //TODO: add in logic for hitting a hop size first
     #[test]
     fn test_read_index_integrety() {
-        let mut buffer: CircularBuffer<i32, 5> = CircularBuffer::new(0, None);
+        let mut inbuffer: CircularBuffer<i32, 5> = CircularBuffer::new(0, None);
+        let mut outbuffer: CircularBuffer<i32, 5> = CircularBuffer::new(0, None);
+        let hopsize:i32 = 3;
+        let hop_counter:i32 = 0;
 
-        for i in 1..=5 {
-            buffer.write(i);
-            println!("{}", i);
+        //
+        for i in 1..=10 {
+            inbuffer.write(i);
+            println!("in sample {}", i);
+
+            let out_sample = outbuffer.read_and_reset();
+            println!("out sample {}", i);
+
+            if(hop_counter >= hopsize)
+            {
+                hop_counter = 0;
+
+                let buffer_in_clone = Arc::clone(&inbuffer);
+                let buffer_out_clone = Arc::clone(&outbuffer);    
+
+                thread::spawn(move || {
+                    let mut last_input_phases = [0.0; WINDOW_SIZE];
+                    let mut last_output_phases = [0.0; WINDOW_SIZE];
+                    let mut bin_frequencies = [0.0; WINDOW_SIZE / 2];
+    
+                    {
+                        let mut in_buf = buffer_in_clone.lock().unwrap();
+                        let mut out_buf = buffer_out_clone.lock().unwrap();
+    
+                        process_fft(
+                            &mut in_buf,
+                            &mut out_buf,
+                            &mut last_input_phases,
+                            &mut last_output_phases,
+                            &mut bin_frequencies,
+                        );
+                        out_buf.next_hop();
+                    }
+                });
+
+            }
+            hop_counter += 1;
+
+
         }
 
-        buffer.push_read_pointer_back(2);
-        for i in 1..=5 {
-            let mut res = buffer.read();
-            println!("{}", res);
-        }
-
-        for i in 1..=5 {
-            buffer.write(i);
-            println!("{}", i);
-        }
-
-        buffer.push_read_pointer_back(2);
-        for i in 1..=5 {
-            let mut res = buffer.read();
-            println!("{}", res);
-        }
-
-        for i in 1..=5 {
-            buffer.write(i);
-            println!("{}", i);
-        }
-
-        buffer.push_read_pointer_back(2);
-        for i in 1..=5 {
-            let mut res = buffer.read();
-            println!("{}", res);
-        }
+      
 
         assert_eq!(buffer.read_index+1, 4);
     }
